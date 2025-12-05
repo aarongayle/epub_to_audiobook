@@ -2,8 +2,10 @@ import io
 import logging
 import math
 import os
+import wave
 
-from openai import OpenAI
+from google import genai
+from google.genai import types
 
 from audiobook_generator.core.audio_tags import AudioTags
 from audiobook_generator.config.general_config import GeneralConfig
@@ -15,7 +17,8 @@ logger = logging.getLogger(__name__)
 
 
 def get_gemini_supported_output_formats():
-    return ["mp3", "aac", "flac", "opus", "wav"]
+    # Native Gemini TTS only outputs PCM/WAV
+    return ["wav"]
 
 
 def get_gemini_supported_voices():
@@ -56,40 +59,49 @@ def get_gemini_supported_voices():
 
 
 def get_gemini_supported_models():
-    return ["gemini-2.5-flash-tts", "gemini-2.5-pro-tts"]
+    return ["gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts"]
 
 
 def get_price(model):
     # Pricing TBD - using placeholder values
-    if model == "gemini-2.5-flash-tts":
+    if model == "gemini-2.5-flash-preview-tts":
         return 0.0  # Update with actual pricing when available
-    elif model == "gemini-2.5-pro-tts":
+    elif model == "gemini-2.5-pro-preview-tts":
         return 0.0  # Update with actual pricing when available
     else:
         logger.warning(f"Gemini: Unsupported model name: {model}, unable to retrieve the price")
         return 0.0
 
 
+def pcm_to_wav_bytes(pcm_data: bytes, channels: int = 1, rate: int = 24000, sample_width: int = 2) -> bytes:
+    """Convert raw PCM data to WAV format in memory."""
+    wav_buffer = io.BytesIO()
+    with wave.open(wav_buffer, "wb") as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(sample_width)
+        wf.setframerate(rate)
+        wf.writeframes(pcm_data)
+    wav_buffer.seek(0)
+    return wav_buffer.read()
+
+
 class GeminiTTSProvider(BaseTTSProvider):
     def __init__(self, config: GeneralConfig):
-        config.model_name = config.model_name or "gemini-2.5-flash-tts"
+        config.model_name = config.model_name or "gemini-2.5-flash-preview-tts"
         config.voice_name = config.voice_name or "Kore"
-        config.speed = config.speed or 1.0
-        config.output_format = config.output_format or "mp3"
+        config.output_format = config.output_format or "wav"
 
         self.price = get_price(config.model_name)
-        super().__init__(config)
-
-        # Gemini uses OpenAI-compatible API with custom base URL
+        
+        # Check for API key before calling super().__init__ which calls validate_config
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key:
             raise ValueError("GEMINI_API_KEY environment variable is not set")
 
-        self.client = OpenAI(
-            api_key=api_key,
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-            max_retries=4,
-        )
+        # Initialize the Google GenAI client
+        self.client = genai.Client(api_key=api_key)
+        
+        super().__init__(config)
 
     def __str__(self) -> str:
         return super().__str__()
@@ -111,19 +123,30 @@ class GeminiTTSProvider(BaseTTSProvider):
                 f"Processing {chunk_id}, length={len(chunk)}, text=[{chunk}]"
             )
 
-            response = self.client.audio.speech.create(
+            response = self.client.models.generate_content(
                 model=self.config.model_name,
-                voice=self.config.voice_name,
-                speed=self.config.speed,
-                input=chunk,
-                response_format=self.config.output_format,
+                contents=chunk,
+                config=types.GenerateContentConfig(
+                    response_modalities=["AUDIO"],
+                    speech_config=types.SpeechConfig(
+                        voice_config=types.VoiceConfig(
+                            prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                                voice_name=self.config.voice_name,
+                            )
+                        )
+                    ),
+                )
             )
 
-            logger.debug(f"Remote server response: status_code={response.response.status_code}, "
-                         f"size={len(response.content)} bytes, "
-                         f"content={response.content[:128]}...")
+            # Extract PCM audio data from response
+            pcm_data = response.candidates[0].content.parts[0].inline_data.data
+            
+            # Convert PCM to WAV format
+            wav_data = pcm_to_wav_bytes(pcm_data)
+            
+            logger.debug(f"Received audio chunk: {len(wav_data)} bytes")
 
-            audio_segments.append(io.BytesIO(response.content))
+            audio_segments.append(io.BytesIO(wav_data))
             chunk_ids.append(chunk_id)
 
         merge_audio_segments(audio_segments, output_file, self.config.output_format, chunk_ids, self.config.use_pydub_merge)
@@ -138,12 +161,9 @@ class GeminiTTSProvider(BaseTTSProvider):
 
     def validate_config(self):
         if self.config.output_format not in get_gemini_supported_output_formats():
-            raise ValueError(f"Gemini: Unsupported output format: {self.config.output_format}")
-        if self.config.speed < 0.25 or self.config.speed > 4.0:
-            raise ValueError(f"Gemini: Unsupported speed: {self.config.speed}")
+            raise ValueError(f"Gemini: Unsupported output format: {self.config.output_format}. Only 'wav' is supported.")
         if self.config.voice_name not in get_gemini_supported_voices():
             raise ValueError(f"Gemini: Unsupported voice: {self.config.voice_name}. Voice names are case-sensitive.")
 
     def estimate_cost(self, total_chars):
         return math.ceil(total_chars / 1000) * self.price
-
