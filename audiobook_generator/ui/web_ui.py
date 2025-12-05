@@ -12,6 +12,8 @@ from audiobook_generator.tts_providers.edge_tts_provider import get_edge_tts_sup
     get_edge_tts_supported_language, get_edge_tts_supported_output_formats
 from audiobook_generator.tts_providers.openai_tts_provider import get_openai_supported_models, \
     get_openai_supported_voices, get_openai_instructions_example, get_openai_supported_output_formats
+from audiobook_generator.tts_providers.gemini_tts_provider import get_gemini_supported_models, \
+    get_gemini_supported_voices, get_gemini_supported_output_formats
 from audiobook_generator.tts_providers.piper_tts_provider import get_piper_supported_languages, \
     get_piper_supported_voices, get_piper_supported_qualities, get_piper_supported_speakers
 from audiobook_generator.utils.log_handler import generate_unique_log_path
@@ -50,6 +52,7 @@ def get_piper_supported_speakers_gui(language, voice, quality):
 def process_ui_form(input_file, output_dir, worker_count, log_level, output_text, preview,
                     search_and_replace_file, title_mode, new_line_mode, chapter_start, chapter_end, remove_endnotes, remove_reference_numbers,
                     model, voices, speed, openai_output_format, instructions,
+                    gemini_model, gemini_voice, gemini_speed, gemini_output_format,
                     azure_language, azure_voice, azure_output_format, azure_break_duration,
                     edge_language, edge_voice, edge_output_format, proxy, edge_voice_rate, edge_volume, edge_pitch, edge_break_duration,
                     piper_executable_path, piper_docker_image, piper_language, piper_voice, piper_quality, piper_speaker,
@@ -80,6 +83,12 @@ def process_ui_form(input_file, output_dir, worker_count, log_level, output_text
         config.model_name = model
         config.instructions = instructions
         config.speed = speed
+    elif selected_tts == "Gemini":
+        config.tts = "gemini"
+        config.output_format = gemini_output_format
+        config.voice_name = gemini_voice
+        config.model_name = gemini_model
+        config.speed = gemini_speed
     elif selected_tts == "Azure":
         config.tts = "azure"
         config.language = azure_language
@@ -187,6 +196,16 @@ def host_ui(config):
                     instructions = gr.TextArea(label="Voice Instructions", interactive=True, lines=3,
                                                value=get_openai_instructions_example())
                 open_ai_tab.select(on_tab_change, inputs=None, outputs=None)
+            with gr.Tab("Gemini", id="gemini_tab_id") as gemini_tab:
+                gr.Markdown("It is expected that user configured: `GEMINI_API_KEY` in the environment variables.")
+                with gr.Row(equal_height=True):
+                    gemini_model = gr.Dropdown(get_gemini_supported_models(), label="Model", interactive=True, allow_custom_value=True)
+                    gemini_voice = gr.Dropdown(get_gemini_supported_voices(), label="Voice", interactive=True, 
+                                               info="Voice names are case-sensitive")
+                    gemini_speed = gr.Slider(minimum=0.25, maximum=4.0, step=0.1, label="Speed", value=1.0,
+                                             info="Speed of the speech, 1.0 is normal speed")
+                    gemini_output_format = gr.Dropdown(get_gemini_supported_output_formats(), label="Output Format", interactive=True)
+                gemini_tab.select(on_tab_change, inputs=None, outputs=None)
             with gr.Tab("Azure", id="azure_tab_id") as azure_tab:
                 gr.Markdown("It is expected that user configured: `MS_TTS_KEY` and `MS_TTS_REGION` in the environment variables.")
                 with gr.Row(equal_height=True):
@@ -300,6 +319,7 @@ def host_ui(config):
                     input_file, output_dir, worker_count, log_level, output_text, preview,
                     search_and_replace_file, title_mode, new_line_mode, chapter_start, chapter_end, remove_endnotes, remove_reference_numbers,
                     model, voices, speed, openai_output_format, instructions,
+                    gemini_model, gemini_voice, gemini_speed, gemini_output_format,
                     azure_language, azure_voice, azure_output_format, azure_break_duration,
                     edge_language, edge_voice, edge_output_format, proxy, edge_voice_rate, edge_volume, edge_pitch, edge_break_duration,
                     piper_executable_path, piper_docker_image, piper_language, piper_voice, piper_quality, piper_speaker,
